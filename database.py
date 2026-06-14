@@ -774,4 +774,60 @@ async def is_autoplay(chat_id: int) -> bool:
     cached = _autoplay_cache.get(chat_id)
     if cached is not None:
         return cached
-   
+    data = await autoplaydb.find_one({"chat_id": chat_id})
+    state = bool(data and data.get("enabled", False))
+    _autoplay_cache[chat_id] = state
+    return state
+
+
+async def autoplay_on(chat_id: int):
+    """Enable autoplay for this chat."""
+    _autoplay_cache[chat_id] = True
+    await autoplaydb.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"enabled": True}},
+        upsert=True,
+    )
+
+
+async def autoplay_off(chat_id: int):
+    """Disable autoplay for this chat."""
+    _autoplay_cache[chat_id] = False
+    await autoplaydb.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"enabled": False}},
+        upsert=True,
+    )
+
+
+# ── Autoplay History (MongoDB — restart proof) ─────────────────────────────
+autoplay_historydb = mongodb.autoplay_history
+_ap_history_cache: dict = {}  # in-memory cache {chat_id: set}
+
+
+async def ap_history_add(chat_id: int, vidid: str):
+    """Played video ID history mein add karo."""
+    if chat_id not in _ap_history_cache:
+        _ap_history_cache[chat_id] = set()
+    _ap_history_cache[chat_id].add(vidid)
+    await autoplay_historydb.update_one(
+        {"chat_id": chat_id},
+        {"$addToSet": {"played": vidid}},
+        upsert=True,
+    )
+
+
+async def ap_history_get(chat_id: int) -> set:
+    """Played IDs ka set return karo (cache + DB)."""
+    if chat_id in _ap_history_cache:
+        return _ap_history_cache[chat_id]
+    data = await autoplay_historydb.find_one({"chat_id": chat_id})
+    played = set(data.get("played", [])) if data else set()
+    _ap_history_cache[chat_id] = played
+    return played
+
+
+async def ap_history_clear(chat_id: int):
+    """History clear karo (jab 50+ ho jaye)."""
+    _ap_history_cache[chat_id] = set()
+    await autoplay_historydb.delete_one({"chat_id": chat_id})
